@@ -35,7 +35,7 @@ class Model(nn.Module):
         )
         print(self.model, file=ckp.log_file)
 
-    def forward(self, x, idx_scale):
+    def forward(self, x, idx_scale, rgb=None):
         self.idx_scale = idx_scale
         if hasattr(self.model, 'set_scale'):
             self.model.set_scale(idx_scale)
@@ -44,7 +44,7 @@ class Model(nn.Module):
             if self.n_GPUs > 1:
                 return P.data_parallel(self.model, x, range(self.n_GPUs))
             else:
-                return self.model(x)
+                return self.model(x,rgb)
         else:
             if self.chop:
                 forward_function = self.forward_chop
@@ -52,9 +52,9 @@ class Model(nn.Module):
                 forward_function = self.model.forward
 
             if self.self_ensemble:
-                return self.forward_x8(x, forward_function=forward_function)
+                return self.forward_x8(x,rgb, forward_function=forward_function)
             else:
-                return forward_function(x)
+                return forward_function(x, rgb)
 
     def save(self, apath, epoch, is_best=False):
         save_dirs = [os.path.join(apath, 'model_latest.pt')]

@@ -24,6 +24,12 @@ def get_patch(*args, patch_size=96, scale=2, multi=False, input_large=False):
     else:
         tx, ty = ix, iy
 
+    # print('lr size {} iy+ip: {} ix+ip: {}'.format(args[0].shape, iy+ip,ix+ip))
+
+    hr_patch = args[1][ty:ty + tp, tx:tx + tp, :]
+    rgb_path = args[2][ty:ty + tp, tx:tx + tp, :]
+    # print(hr_patch.shape)
+    # print(rgb_path.shape)
     ret = [
         args[0][iy:iy + ip, ix:ix + ip, :],
         *[a[ty:ty + tp, tx:tx + tp, :] for a in args[1:]]
@@ -62,6 +68,7 @@ def augment(*args, hflip=True, rot=True):
     rot90 = rot and random.random() < 0.5
 
     def _augment(img):
+        # print(img.shape)
         if hflip: img = img[:, ::-1, :]
         if vflip: img = img[::-1, :, :]
         if rot90: img = img.transpose(1, 0, 2)

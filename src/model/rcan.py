@@ -26,6 +26,18 @@ class CALayer(nn.Module):
         y = self.conv_du(y)
         return x * y
 
+## Spatial Attention (SA) Layer
+class SALayer(nn.Module):
+    def __init__(self,channel,kernel_size=3):
+        super(SALayer, self).__init__()
+        # feature channel downscale and upscale --> channel weight
+        self.conv_sa = nn.Conv2d(channel,channel,kernel_size, padding=1,groups=channel)
+
+
+    def forward(self, x):
+        y = self.conv_sa(x)
+        return x * y
+
 ## Residual Channel Attention Block (RCAB)
 class RCAB(nn.Module):
     def __init__(
@@ -34,10 +46,11 @@ class RCAB(nn.Module):
 
         super(RCAB, self).__init__()
         modules_body = []
-        for i in range(2):
-            modules_body.append(conv(n_feat, n_feat, kernel_size, bias=bias))
+        for i in range(3):
+            modules_body.append(conv(n_feat, n_feat, kernel_size, bias=bias,dilation=2**i,padding = 2**i))
             if bn: modules_body.append(nn.BatchNorm2d(n_feat))
-            if i == 0: modules_body.append(act)
+            if i is not 2: modules_body.append(act)
+            # if i == 0: modules_body.append(act)
         modules_body.append(CALayer(n_feat, reduction))
         self.body = nn.Sequential(*modules_body)
         self.res_scale = res_scale
@@ -79,7 +92,7 @@ class RCAN(nn.Module):
         act = nn.ReLU(True)
         
         # RGB mean for DIV2K
-        self.sub_mean = common.MeanShift(args.rgb_range)
+        self.sub_mean = common.MeanShift(args.n_colors, args.rgb_range,rgb_mean=[0.5],rgb_std =[1.0])
         
         # define head module
         modules_head = [conv(args.n_colors, n_feats, kernel_size)]
@@ -97,13 +110,13 @@ class RCAN(nn.Module):
             common.Upsampler(conv, scale, n_feats, act=False),
             conv(n_feats, args.n_colors, kernel_size)]
 
-        self.add_mean = common.MeanShift(args.rgb_range, sign=1)
+        self.add_mean = common.MeanShift(args.n_colors, args.rgb_range,rgb_mean=[0.5],rgb_std =[1.0], sign=1)
 
         self.head = nn.Sequential(*modules_head)
         self.body = nn.Sequential(*modules_body)
         self.tail = nn.Sequential(*modules_tail)
 
-    def forward(self, x):
+    def forward(self, x,rgb=None):
         x = self.sub_mean(x)
         x = self.head(x)
 
@@ -113,7 +126,7 @@ class RCAN(nn.Module):
         x = self.tail(res)
         x = self.add_mean(x)
 
-        return x 
+        return x
 
     def load_state_dict(self, state_dict, strict=False):
         own_state = self.state_dict()

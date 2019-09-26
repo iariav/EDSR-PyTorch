@@ -81,10 +81,14 @@ parser.add_argument('--n_resgroups', type=int, default=10,
                     help='number of residual groups')
 parser.add_argument('--reduction', type=int, default=16,
                     help='number of feature maps reduction')
+parser.add_argument('--use_sa', default=True,
+                    help='use sa attention')
 
 # Training specifications
 parser.add_argument('--reset', action='store_true',
                     help='reset the training')
+parser.add_argument('--use_amp', action='store_true',
+                    help='use amp')
 parser.add_argument('--test_every', type=int, default=1000,
                     help='do test per every N batches')
 parser.add_argument('--epochs', type=int, default=300,
@@ -108,7 +112,7 @@ parser.add_argument('--decay', type=str, default='200',
 parser.add_argument('--gamma', type=float, default=0.5,
                     help='learning rate decay factor for step decay')
 parser.add_argument('--optimizer', default='ADAM',
-                    choices=('SGD', 'ADAM', 'RMSprop'),
+                    choices=('SGD', 'ADAM', 'RADAM', 'RMSprop'),
                     help='optimizer to use (SGD | ADAM | RMSprop)')
 parser.add_argument('--momentum', type=float, default=0.9,
                     help='SGD momentum')

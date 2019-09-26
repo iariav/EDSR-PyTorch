@@ -10,6 +10,8 @@ from trainer import Trainer
 torch.manual_seed(args.seed)
 checkpoint = utility.checkpoint(args)
 
+num_gpus = torch.cuda.device_count()
+
 def main():
     global model
     if args.data_test == ['video']:

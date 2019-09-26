@@ -7,6 +7,11 @@ import utility
 import torch
 import torch.nn.utils as utils
 from tqdm import tqdm
+try:
+    from apex import amp
+    APEX_AVAILABLE = True
+except ModuleNotFoundError:
+    APEX_AVAILABLE = False
 
 class Trainer():
     def __init__(self, args, loader, my_model, my_loss, ckp):
@@ -19,9 +24,15 @@ class Trainer():
         self.model = my_model
         self.loss = my_loss
         self.optimizer = utility.make_optimizer(args, self.model)
+        self.use_amp = True if APEX_AVAILABLE and args.use_amp else False
 
         if self.args.load != '':
             self.optimizer.load(ckp.dir, epoch=len(ckp.log))
+
+        if self.use_amp:
+            self.model, self.optimizer = amp.initialize(
+                self.model, self.optimizer, opt_level='O1',
+                keep_batchnorm_fp32=None, loss_scale="dynamic",max_loss_scale=1.0)
 
         self.error_last = 1e8
 
@@ -39,15 +50,19 @@ class Trainer():
         timer_data, timer_model = utility.timer(), utility.timer()
         # TEMP
         self.loader_train.dataset.set_scale(0)
-        for batch, (lr, hr, _,) in enumerate(self.loader_train):
-            lr, hr = self.prepare(lr, hr)
+        for batch, (lr, hr, rgb,  _,) in enumerate(self.loader_train):
+            lr, hr, rgb = self.prepare(lr, hr, rgb)
             timer_data.hold()
             timer_model.tic()
 
             self.optimizer.zero_grad()
-            sr = self.model(lr, 0)
+            sr = self.model(lr, 0, rgb=rgb)
             loss = self.loss(sr, hr)
-            loss.backward()
+            if self.use_amp:
+                with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                    scaled_loss.backward()
+            else:
+                loss.backward()
             if self.args.gclip > 0:
                 utils.clip_grad_value_(
                     self.model.parameters(),
@@ -86,28 +101,38 @@ class Trainer():
         for idx_data, d in enumerate(self.loader_test):
             for idx_scale, scale in enumerate(self.scale):
                 d.dataset.set_scale(idx_scale)
-                for lr, hr, filename in tqdm(d, ncols=80):
-                    lr, hr = self.prepare(lr, hr)
-                    sr = self.model(lr, idx_scale)
+                for lr, hr, rgb, filename in tqdm(d, ncols=80):
+                    lr, hr, rgb = self.prepare(lr, hr, rgb)
+                    sr = self.model(lr, idx_scale, rgb)
                     sr = utility.quantize(sr, self.args.rgb_range)
 
                     save_list = [sr]
                     self.ckp.log[-1, idx_data, idx_scale] += utility.calc_psnr(
                         sr, hr, scale, self.args.rgb_range, dataset=d
                     )
+                    self.ckp.log_rmse[-1, idx_data, idx_scale] += utility.calc_rmse(
+                        sr, hr, scale, self.args.rgb_range, dataset=d
+                    )
+
                     if self.args.save_gt:
                         save_list.extend([lr, hr])
 
                     if self.args.save_results:
                         self.ckp.save_results(d, filename[0], save_list, scale)
 
+                    if self.args.test_only:
+                        print('\nRMSE for image \'{}\' and scale {} is: {}.\n'.format(filename[0],scale,self.ckp.log_rmse[-1, idx_data, idx_scale]))
+
+                self.ckp.log_rmse[-1, idx_data, idx_scale]/= len(d)
                 self.ckp.log[-1, idx_data, idx_scale] /= len(d)
+
                 best = self.ckp.log.max(0)
                 self.ckp.write_log(
-                    '[{} x{}]\tPSNR: {:.3f} (Best: {:.3f} @epoch {})'.format(
+                    '[{} x{}]\tPSNR: {:.3f}\tRMSE: {:.3f} (Best: {:.3f} @epoch {})'.format(
                         d.dataset.name,
                         scale,
                         self.ckp.log[-1, idx_data, idx_scale],
+                        self.ckp.log_rmse[-1, idx_data, idx_scale],
                         best[0][idx_data, idx_scale],
                         best[1][idx_data, idx_scale] + 1
                     )

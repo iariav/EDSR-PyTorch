@@ -46,6 +46,7 @@ class checkpoint():
         self.args = args
         self.ok = True
         self.log = torch.Tensor()
+        self.log_rmse = torch.Tensor()
         now = datetime.datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
 
         if not args.load:
@@ -56,6 +57,7 @@ class checkpoint():
             self.dir = os.path.join('..', 'experiment', args.load)
             if os.path.exists(self.dir):
                 self.log = torch.load(self.get_path('psnr_log.pt'))
+                self.log_rmse = torch.load(self.get_path('rmse_log.pt'))
                 print('Continue from epoch {}...'.format(len(self.log)))
             else:
                 args.load = ''
@@ -88,11 +90,14 @@ class checkpoint():
         trainer.loss.plot_loss(self.dir, epoch)
 
         self.plot_psnr(epoch)
+        self.plot_rmse(epoch)
         trainer.optimizer.save(self.dir)
         torch.save(self.log, self.get_path('psnr_log.pt'))
+        torch.save(self.log_rmse, self.get_path('rmse_log.pt'))
 
     def add_log(self, log):
         self.log = torch.cat([self.log, log])
+        self.log_rmse = torch.cat([self.log_rmse, log])
 
     def write_log(self, log, refresh=False):
         print(log)
@@ -121,6 +126,25 @@ class checkpoint():
             plt.ylabel('PSNR')
             plt.grid(True)
             plt.savefig(self.get_path('test_{}.pdf'.format(d)))
+            plt.close(fig)
+
+    def plot_rmse(self, epoch):
+        axis = np.linspace(1, epoch, epoch)
+        for idx_data, d in enumerate(self.args.data_test):
+            label = 'SR on {}'.format(d)
+            fig = plt.figure()
+            plt.title(label)
+            for idx_scale, scale in enumerate(self.args.scale):
+                plt.plot(
+                    axis,
+                    self.log_rmse[:, idx_data, idx_scale].numpy(),
+                    label='Scale {}'.format(scale)
+                )
+            plt.legend()
+            plt.xlabel('Epochs')
+            plt.ylabel('RMSE')
+            plt.grid(True)
+            plt.savefig(self.get_path('test_rmse_{}.pdf'.format(d)))
             plt.close(fig)
 
     def begin_background(self):
@@ -180,6 +204,34 @@ def calc_psnr(sr, hr, scale, rgb_range, dataset=None):
 
     return -10 * math.log10(mse)
 
+def calc_rmse(sr, hr, scale, rgb_range, dataset=None):
+    if hr.nelement() == 1: return 0
+
+    diff = (sr - hr) #/ rgb_range
+    if dataset and dataset.dataset.benchmark:
+        shave = scale
+        if diff.size(1) > 1:
+            gray_coeffs = [65.738, 129.057, 25.064]
+            convert = diff.new_tensor(gray_coeffs).view(1, 3, 1, 1) / 256
+            diff = diff.mul(convert).sum(dim=1)
+    else:
+        shave = scale + 6
+
+    valid = diff[..., shave:-shave, shave:-shave]
+    rmse = math.sqrt(valid.pow(2).mean())
+
+    return rmse
+
+
+# from PIL import Image, ImageChops
+# import math
+# import numpy as np
+#
+# def rmsdiff(im1, im2):
+#     """Calculates the root mean square error (RSME) between two images"""
+#     errors = np.asarray(ImageChops.difference(im1, im2)) / 255
+#     return math.sqrt(np.mean(np.square(errors)))
+
 def make_optimizer(args, target):
     '''
         make optimizer and scheduler together
@@ -197,6 +249,11 @@ def make_optimizer(args, target):
         kwargs_optimizer['eps'] = args.epsilon
     elif args.optimizer == 'RMSprop':
         optimizer_class = optim.RMSprop
+        kwargs_optimizer['eps'] = args.epsilon
+    elif args.optimizer == 'RADAM':
+        from radam import RAdam
+        optimizer_class = RAdam
+        kwargs_optimizer['betas'] = args.betas
         kwargs_optimizer['eps'] = args.epsilon
 
     # scheduler
