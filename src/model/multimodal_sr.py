@@ -79,8 +79,30 @@ class RCAB(nn.Module):
 
         super(RCAB, self).__init__()
         modules_body = []
+        for i in range(4):
+            modules_body.append(conv(n_feat, n_feat, kernel_size, bias=bias,dilation=2**i,padding = 2**i))
+            if bn: modules_body.append(nn.BatchNorm2d(n_feat))
+            if i is not 3: modules_body.append(act)
+            # if i == 0: modules_body.append(act)
+        modules_body.append(CALayer(n_feat, reduction))
+        self.body = nn.Sequential(*modules_body)
+        self.res_scale = res_scale
+
+    def forward(self, x):
+        res = self.body(x)
+        #res = self.body(x).mul(self.res_scale)
+        res += x
+        return res
+
+class RCAB_RGB(nn.Module):
+    def __init__(
+        self, conv, n_feat, kernel_size, reduction,
+        bias=True, bn=False, act=nn.ReLU(True), res_scale=1):
+
+        super(RCAB_RGB, self).__init__()
+        modules_body = []
         for i in range(2):
-            modules_body.append(conv(n_feat, n_feat, kernel_size, bias=bias,dilation=1,padding = 1))
+            modules_body.append(conv(n_feat, n_feat, kernel_size, bias=bias))#,dilation=1,padding = 1))
             if bn: modules_body.append(nn.BatchNorm2d(n_feat))
             if i == 0: modules_body.append(act)
         modules_body.append(CALayer(n_feat, reduction))
@@ -100,6 +122,23 @@ class ResidualGroup(nn.Module):
         modules_body = []
         modules_body = [
             RCAB(
+                conv, n_feat, kernel_size, reduction, bias=True, bn=False, act=nn.ReLU(True), res_scale=1) \
+            for _ in range(n_resblocks)]
+        modules_body.append(conv(n_feat, n_feat, kernel_size))
+        self.body = nn.Sequential(*modules_body)
+
+    def forward(self, x):
+        res = self.body(x)
+        res += x
+        return res
+
+## Residual Group (RG)
+class ResidualGroup_RGB(nn.Module):
+    def __init__(self, conv, n_feat, kernel_size, reduction, act, res_scale, n_resblocks):
+        super(ResidualGroup_RGB, self).__init__()
+        modules_body = []
+        modules_body = [
+            RCAB_RGB(
                 conv, n_feat, kernel_size, reduction, bias=True, bn=False, act=nn.ReLU(True), res_scale=1) \
             for _ in range(n_resblocks)]
         modules_body.append(conv(n_feat, n_feat, kernel_size))
@@ -162,7 +201,7 @@ class RCAN(nn.Module):
 
         # define body module
         modules_body = [
-            ResidualGroup(
+            ResidualGroup_RGB(
                 conv, n_feats, kernel_size, reduction, act=act, res_scale=args.res_scale, n_resblocks=n_resblocks) \
             for _ in range(n_resgroups)]
 

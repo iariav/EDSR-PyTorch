@@ -46,11 +46,11 @@ class RCAB(nn.Module):
 
         super(RCAB, self).__init__()
         modules_body = []
-        for i in range(3):
+        for i in range(2):
             modules_body.append(conv(n_feat, n_feat, kernel_size, bias=bias,dilation=2**i,padding = 2**i))
             if bn: modules_body.append(nn.BatchNorm2d(n_feat))
-            if i is not 2: modules_body.append(act)
-            # if i == 0: modules_body.append(act)
+            # if i is not 3: modules_body.append(act)
+            if i == 0: modules_body.append(act)
         modules_body.append(CALayer(n_feat, reduction))
         self.body = nn.Sequential(*modules_body)
         self.res_scale = res_scale

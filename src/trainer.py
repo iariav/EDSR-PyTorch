@@ -23,6 +23,8 @@ class Trainer():
         self.loader_test = loader.loader_test
         self.model = my_model
         self.loss = my_loss
+        self.freeze = args.freeze
+        self.unfreeze_epoch = args.unfreeze_epoch
         self.optimizer = utility.make_optimizer(args, self.model)
         self.use_amp = True if APEX_AVAILABLE and args.use_amp else False
 
@@ -36,10 +38,32 @@ class Trainer():
 
         self.error_last = 1e8
 
+        if self.freeze:
+            def freeze_layer(layer):
+                for param in layer.parameters():
+                    param.requires_grad = False
+
+            freeze_layer(self.model.model.body)
+            freeze_layer(self.model.model.head)
+            freeze_layer(self.model.model.tail)
+            self.ckp.write_log('\nFroze depth branch parameters.\n')
+
+
+
     def train(self):
         self.loss.step()
         epoch = self.optimizer.get_last_epoch() + 1
         lr = self.optimizer.get_lr()
+
+        if self.freeze and epoch > self.unfreeze_epoch:
+            def unfreeze_layer(layer):
+                for param in layer.parameters():
+                    param.requires_grad = True
+
+            unfreeze_layer(self.model.model.body)
+            unfreeze_layer(self.model.model.head)
+            unfreeze_layer(self.model.model.tail)
+            self.ckp.write_log('\nUnfroze depth branch parameters.\n')
 
         self.ckp.write_log(
             '[Epoch {}]\tLearning rate: {:.2e}'.format(epoch, Decimal(lr))
@@ -110,18 +134,21 @@ class Trainer():
                     self.ckp.log[-1, idx_data, idx_scale] += utility.calc_psnr(
                         sr, hr, scale, self.args.rgb_range, dataset=d
                     )
-                    self.ckp.log_rmse[-1, idx_data, idx_scale] += utility.calc_rmse(
+                    curr_rmse = utility.calc_rmse(
                         sr, hr, scale, self.args.rgb_range, dataset=d
                     )
 
+                    self.ckp.log_rmse[-1, idx_data, idx_scale] += curr_rmse
+
                     if self.args.save_gt:
-                        save_list.extend([lr, hr])
+                        bc = torch.nn.functional.interpolate(lr, scale_factor=scale, mode='bicubic',align_corners=True)
+                        save_list.extend([lr, hr, bc])
 
                     if self.args.save_results:
                         self.ckp.save_results(d, filename[0], save_list, scale)
 
                     if self.args.test_only:
-                        print('\nRMSE for image \'{}\' and scale {} is: {}.\n'.format(filename[0],scale,self.ckp.log_rmse[-1, idx_data, idx_scale]))
+                        print('\nRMSE for image \'{}\' and scale {} is: {}.\n'.format(filename[0],scale,curr_rmse))
 
                 self.ckp.log_rmse[-1, idx_data, idx_scale]/= len(d)
                 self.ckp.log[-1, idx_data, idx_scale] /= len(d)

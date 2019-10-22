@@ -42,7 +42,7 @@ class Model(nn.Module):
 
         if self.training:
             if self.n_GPUs > 1:
-                return P.data_parallel(self.model, x, range(self.n_GPUs))
+                return P.data_parallel(self.model, (x,rgb), range(self.n_GPUs))
             else:
                 return self.model(x,rgb)
         else:

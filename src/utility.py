@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 
 import numpy as np
 import imageio
+from shutil import copyfile
 
 import torch
 import torch.optim as optim
@@ -80,6 +81,9 @@ class checkpoint():
             f.write('\n')
 
         self.n_processes = 8
+
+        model_file = './model/' + args.model + '.py'
+        copyfile(model_file, self.get_path( args.model + '.py'))
 
     def get_path(self, *subdir):
         return os.path.join(self.dir, *subdir)
@@ -176,7 +180,7 @@ class checkpoint():
                 '{}_x{}_'.format(filename, scale)
             )
 
-            postfix = ('SR', 'LR', 'HR')
+            postfix = ('SR', 'LR', 'HR','bicubic')
             for v, p in zip(save_list, postfix):
                 normalized = v[0].mul(255 / self.args.rgb_range)
                 tensor_cpu = normalized.byte().permute(1, 2, 0).cpu()
