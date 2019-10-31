@@ -28,10 +28,16 @@ class Demo(data.Dataset):
         hr = imageio.imread(self.filelist[idx])
         lr_fname = self.filelist[idx].replace('test_HR','test_LR_bicubic/X2')
         lr = imageio.imread(lr_fname)
-        lr,hr = common.set_channel(lr,hr, n_channels=self.args.n_colors)
-        lr_t, hr_t = common.np2Tensor(lr,hr, rgb_range=self.args.rgb_range)
 
-        return lr_t, hr_t, -1, filename
+        rgb_fname = self.filelist[idx].replace('test_HR', 'test_HR_rgb')
+        rgb = imageio.imread(rgb_fname)
+
+        lr, hr = common.set_channel(lr, hr, n_channels=self.args.n_colors)
+        lr_t, hr_t = common.np2Tensor(lr, hr, rgb_range=self.args.rgb_range)
+        rgb_t = common.np2Tensor(rgb, rgb_range=255.0)
+        return lr_t, hr_t, rgb_t[0], filename
+
+        # return lr_t, hr_t, -1, filename
 
     def __len__(self):
         return len(self.filelist)

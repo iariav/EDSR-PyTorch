@@ -88,6 +88,8 @@ parser.add_argument('--reduction', type=int, default=16,
                     help='number of feature maps reduction')
 parser.add_argument('--use_sa', default=True,
                     help='use sa attention')
+parser.add_argument('--use_ca', default=True,
+                    help='use ca attention')
 
 # Training specifications
 parser.add_argument('--reset', action='store_true',

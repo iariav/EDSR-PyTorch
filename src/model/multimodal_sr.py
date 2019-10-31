@@ -41,34 +41,45 @@ class SALayer(nn.Module):
 
 ## Inject Attention (IAL) Layer
 class IALayer(nn.Module):
-    def __init__(self,channel,kernel_size=3, reduction=16, use_sa=True):
+    def __init__(self,channel,kernel_size=3, reduction=16, use_sa=True, use_ca=True):
         super(IALayer, self).__init__()
 
         self.use_sa = use_sa
+        self.use_ca = use_ca
+
         # CA
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        # feature channel downscale and upscale --> channel weight
-        self.conv_du = nn.Sequential(
-            nn.Conv2d(channel, channel // reduction, 1, padding=0, bias=True),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(channel // reduction, channel, 1, padding=0, bias=True)
-        )
+        if self.use_ca:
+            self.avg_pool = nn.AdaptiveAvgPool2d(1)
+            # feature channel downscale and upscale --> channel weight
+            self.conv_du = nn.Sequential(
+                nn.Conv2d(channel, channel // reduction, 1, padding=0, bias=True),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(channel // reduction, channel, 1, padding=0, bias=True)
+            )
+
+        # SA
         if self.use_sa:
-            # SA
+
             self.conv_sa = nn.Conv2d(channel, channel, kernel_size, padding=1, groups=channel, stride=2)
 
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
 
-        ca = self.avg_pool(x)
-        ca = self.conv_du(ca)
-        if self.use_sa:
+        if self.use_ca and self.use_sa:
+            ca = self.avg_pool(x)
+            ca = self.conv_du(ca)
             sa = self.conv_sa(x)
-            m = ca + sa
-            return self.sigmoid(m)
-        else:
+            return self.sigmoid(ca + sa)
+        elif self.use_sa:
+            sa = self.conv_sa(x)
+            return self.sigmoid(sa)
+        elif self.use_ca:
+            ca = self.avg_pool(x)
+            ca = self.conv_du(ca)
             return self.sigmoid(ca)
+        else:
+            return torch.zeros(1,1)
 
 
 ## Residual Channel Attention Block (RCAB)
@@ -79,11 +90,11 @@ class RCAB(nn.Module):
 
         super(RCAB, self).__init__()
         modules_body = []
-        for i in range(4):
+        for i in range(2):
             modules_body.append(conv(n_feat, n_feat, kernel_size, bias=bias,dilation=2**i,padding = 2**i))
             if bn: modules_body.append(nn.BatchNorm2d(n_feat))
-            if i is not 3: modules_body.append(act)
-            # if i == 0: modules_body.append(act)
+            # if i is not 3: modules_body.append(act)
+            if i == 0: modules_body.append(act)
         modules_body.append(CALayer(n_feat, reduction))
         self.body = nn.Sequential(*modules_body)
         self.res_scale = res_scale
@@ -207,8 +218,8 @@ class RCAN(nn.Module):
 
         modules_body.append(conv(n_feats, n_feats, kernel_size))
 
-        self.head_AILayer = IALayer(n_feats, kernel_size, reduction,use_sa=args.use_sa)
-        modules_AILayers = [IALayer(n_feats, kernel_size, reduction,use_sa=args.use_sa) for _ in range(n_resgroups)]
+        self.head_AILayer = IALayer(n_feats, kernel_size, reduction,use_sa=args.use_sa, use_ca=args.use_ca)
+        modules_AILayers = [IALayer(n_feats, kernel_size, reduction,use_sa=args.use_sa, use_ca=args.use_ca) for _ in range(n_resgroups)]
 
         # # define tail module
         # modules_tail = [
@@ -230,6 +241,9 @@ class RCAN(nn.Module):
         rgb = self.sub_mean_rgb(rgb)
         rgb = self.head_rgb(rgb)
 
+        # A = self.head_AILayer(rgb)
+        # min = torch.min(A)
+        # max = torch.max(A)
         d += d * self.res_scale * self.head_AILayer(rgb)
 
         res_d = d
@@ -244,6 +258,9 @@ class RCAN(nn.Module):
             res_rgb    = rgb_module(res_rgb)
 
             if 'ResidualGroup' in str(d_module):
+                # A = self.AILayers[m](res_rgb)
+                # min = torch.min(A)
+                # max = torch.max(A)
                 res_d  += res_d * self.res_scale * self.AILayers[m](res_rgb)
 
         res_d += d

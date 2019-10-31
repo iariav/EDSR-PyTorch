@@ -10,6 +10,9 @@ import imageio
 import torch
 import torch.utils.data as data
 
+D_PREFIX = 'Depth'
+RGB_PREFIX = 'Image'
+
 class SRData(data.Dataset):
     def __init__(self, args, name='', train=True, benchmark=False):
         self.args = args
@@ -52,7 +55,7 @@ class SRData(data.Dataset):
                 self._check_and_load(args.ext, h, b, verbose=True)
             for h in list_hr:
                 h = h.replace('train_HR', 'train_HR_rgb')
-                h = h.replace('Depth_', 'Image_')
+                h = h.replace(D_PREFIX, RGB_PREFIX)
                 b = h.replace(self.apath, path_bin)
                 h = h.replace('tif','png')
                 b = b.replace(self.ext[0], '.pt')
@@ -128,7 +131,7 @@ class SRData(data.Dataset):
     def _load_file(self, idx):
         idx = self._get_index(idx)
         f_hr = self.depth_hr[idx]
-        f_rgb = f_hr.replace('HR','HR_rgb').replace('Depth','Image')
+        f_rgb = f_hr.replace('HR','HR_rgb').replace(D_PREFIX,RGB_PREFIX)
         f_lr = self.depth_lr[self.idx_scale][idx]
         # print(idx)
         filename, _ = os.path.splitext(os.path.basename(f_hr))
