@@ -1,7 +1,6 @@
 import os
 import math
 from decimal import Decimal
-
 import utility
 
 import torch
@@ -34,7 +33,7 @@ class Trainer():
         if self.use_amp:
             self.model, self.optimizer = amp.initialize(
                 self.model, self.optimizer, opt_level='O1',
-                keep_batchnorm_fp32=None, loss_scale="dynamic",max_loss_scale=1.0)
+                keep_batchnorm_fp32=None, loss_scale='dynamic')#,max_loss_scale=128.0)
 
         self.error_last = 1e8
 
@@ -46,6 +45,8 @@ class Trainer():
             freeze_layer(self.model.model.body)
             freeze_layer(self.model.model.head)
             freeze_layer(self.model.model.tail)
+            freeze_layer(self.model.model.head_rgb)
+            freeze_layer(self.model.model.body_rgb)
             self.ckp.write_log('\nFroze depth branch parameters.\n')
 
 
@@ -63,6 +64,8 @@ class Trainer():
             unfreeze_layer(self.model.model.body)
             unfreeze_layer(self.model.model.head)
             unfreeze_layer(self.model.model.tail)
+            unfreeze_layer(self.model.model.head_rgb)
+            unfreeze_layer(self.model.model.body_rgb)
             self.ckp.write_log('\nUnfroze depth branch parameters.\n')
 
         self.ckp.write_log(
@@ -103,6 +106,7 @@ class Trainer():
                     self.loss.display_loss(batch),
                     timer_model.release(),
                     timer_data.release()))
+
 
             timer_data.tic()
 
@@ -164,6 +168,7 @@ class Trainer():
                         best[1][idx_data, idx_scale] + 1
                     )
                 )
+                # self.ckp.write_log('ResScales: {}'.format(self.model._modules['model'].res_scales))
 
         self.ckp.write_log('Forward: {:.2f}s\n'.format(timer_test.toc()))
         self.ckp.write_log('Saving...')

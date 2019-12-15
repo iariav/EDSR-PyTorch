@@ -135,13 +135,15 @@ class ResidualGroup(nn.Module):
             RCAB(
                 conv, n_feat, kernel_size, reduction, bias=True, bn=False, act=nn.ReLU(True), res_scale=1) \
             for _ in range(n_resblocks)]
-        modules_body.append(conv(n_feat, n_feat, kernel_size))
+        # modules_body.append(conv(in_channels=n_feat, out_channels=int(n_feat/2), kernel_size=kernel_size))
         self.body = nn.Sequential(*modules_body)
+        # self.conv = conv(in_channels=n_feat, out_channels=int(n_feat/2), kernel_size=kernel_size) # for concat
+        self.conv = conv(in_channels=n_feat, out_channels=int(n_feat), kernel_size=kernel_size) # for add
 
     def forward(self, x):
         res = self.body(x)
         res += x
-        return res
+        return self.conv(res)
 
 ## Residual Group (RG)
 class ResidualGroup_RGB(nn.Module):
@@ -174,6 +176,8 @@ class RCAN(nn.Module):
         act = nn.ReLU(True)
 
         self.res_scale = args.res_scale
+        self.use_attention = args.use_attention
+        self.scale = scale
 
         ##### Depth branch #####
 
@@ -184,17 +188,26 @@ class RCAN(nn.Module):
         modules_head = [conv(args.n_colors, n_feats, kernel_size)]
 
         # define body module
-        modules_body = [
+        # modules_body = [ # for concat
+        #     ResidualGroup(
+        #         conv, n_feats*2, kernel_size, reduction, act=act, res_scale=args.res_scale, n_resblocks=n_resblocks) \
+        #     for _ in range(n_resgroups)]
+
+        modules_body = [ # for add
             ResidualGroup(
                 conv, n_feats, kernel_size, reduction, act=act, res_scale=args.res_scale, n_resblocks=n_resblocks) \
             for _ in range(n_resgroups)]
 
-        modules_body.append(conv(n_feats, n_feats, kernel_size))
+        # modules_body.append(conv(n_feats*2, n_feats*2, kernel_size)) # for concat
+        modules_body.append(conv(n_feats , n_feats , kernel_size))  # for add
 
         # define tail module
+        # modules_tail = [
+        #     common.Upsampler(conv, scale, n_feats*2, act=False), # for concat
+        #     conv(n_feats*2, args.n_colors, kernel_size)]
         modules_tail = [
-            common.Upsampler(conv, scale, n_feats, act=False),
-            conv(n_feats, args.n_colors, kernel_size)]
+            common.Upsampler(conv, scale, n_feats , act=False), # for add
+            conv(n_feats , args.n_colors, kernel_size)]
 
         self.add_mean = common.MeanShift(args.n_colors, args.rgb_range,rgb_mean=[0.5],rgb_std =[1.0], sign=1)
 
@@ -205,7 +218,7 @@ class RCAN(nn.Module):
         ##### RGB branch #####
 
         # RGB mean for DIV2K
-        self.sub_mean_rgb = common.MeanShift(3, rgb_range=255.0)
+        self.sub_mean_rgb = common.MeanShift(3, 255.0)
 
         # define head module
         modules_head = [conv(3, n_feats, kernel_size)]
@@ -233,18 +246,28 @@ class RCAN(nn.Module):
         self.AILayers = nn.Sequential(*modules_AILayers)
         # self.tail_rgb = nn.Sequential(*modules_tail)
 
+        # self.res_scales = torch.nn.Parameter(torch.full((n_resgroups+1,1),fill_value=0.5),requires_grad=False)
+
     def forward(self, d, rgb):
 
         d = self.sub_mean(d)
         d = self.head(d)
 
         rgb = self.sub_mean_rgb(rgb)
+        # min_rgb = torch.min(rgb)
+        # max_rgb = torch.max(rgb)
+        # rgb -= min_rgb
+        # rgb /= (max_rgb - min_rgb)
         rgb = self.head_rgb(rgb)
 
-        # A = self.head_AILayer(rgb)
-        # min = torch.min(A)
-        # max = torch.max(A)
-        d += d * self.res_scale * self.head_AILayer(rgb)
+        if self.use_attention:
+            AI = self.head_AILayer(rgb)
+            alpha = 0.5#self.res_scales[0]
+            d = d.mul(alpha) + AI.mul(1 - alpha)
+            # d = torch.cat((d,AI),1)
+        else:
+            AI = nn.functional.interpolate(rgb, scale_factor=float(1/self.scale), mode='bilinear', align_corners=True)
+            d = torch.cat((d, AI), 1)
 
         res_d = d
         res_rgb = rgb
@@ -261,7 +284,16 @@ class RCAN(nn.Module):
                 # A = self.AILayers[m](res_rgb)
                 # min = torch.min(A)
                 # max = torch.max(A)
-                res_d  += res_d * self.res_scale * self.AILayers[m](res_rgb)
+                if self.use_attention:
+                    AI = self.AILayers[m](res_rgb)
+                    alpha = 0.5#self.res_scales[m + 1]
+                    # res_d = torch.cat((res_d, AI), 1)
+                    res_d = res_d.mul(alpha) + self.AILayers[m](res_rgb).mul(1 - alpha)
+                else:
+                    AI = nn.functional.interpolate(res_rgb, scale_factor=float(1/self.scale), mode='bilinear',
+                                                   align_corners=True)
+                    res_d = torch.cat((res_d, AI), 1)
+
 
         res_d += d
 

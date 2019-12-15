@@ -90,6 +90,8 @@ parser.add_argument('--use_sa', default=True,
                     help='use sa attention')
 parser.add_argument('--use_ca', default=True,
                     help='use ca attention')
+parser.add_argument('--use_attention', default=True,
+                    help='use ca attention')
 
 # Training specifications
 parser.add_argument('--reset', action='store_true',
