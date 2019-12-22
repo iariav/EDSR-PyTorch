@@ -82,6 +82,77 @@ class IALayer(nn.Module):
             return torch.zeros(1,1)
 
 
+class RDN(nn.Module):
+    def __init__(self, channel, growth_rate, rdb_number, upscale_factor):
+        super(RDN, self).__init__()
+        self.SFF1 = nn.Conv2d(in_channels=channel, out_channels=64, kernel_size=3, padding=1, stride=1)
+        self.SFF2 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, padding=1, stride=1)
+        self.RDB1 = RDB(nb_layers=rdb_number, input_dim=64, growth_rate=64)
+        self.RDB2 = RDB(nb_layers=rdb_number, input_dim=64, growth_rate=64)
+        self.RDB3 = RDB(nb_layers=rdb_number, input_dim=64, growth_rate=64)
+        self.GFF1 = nn.Conv2d(in_channels=64 * 3, out_channels=64, kernel_size=1, padding=0)
+        self.GFF2 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, padding=1)
+        self.upconv = nn.Conv2d(in_channels=64, out_channels=(64 * upscale_factor * upscale_factor), kernel_size=3,
+                                padding=1)
+        self.pixelshuffle = nn.PixelShuffle(upscale_factor)
+        self.conv2 = nn.Conv2d(in_channels=64, out_channels=channel, kernel_size=3, padding=1)
+
+        self.criterion = nn.L1Loss()
+        self.optimizer = torch.optim.Adam(self.parameters())
+        self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[50, 75, 100], gamma=0.5)
+
+    def forward(self, x):
+        f_ = self.SFF1(x)
+        f_0 = self.SFF2(f_)
+        f_1 = self.RDB1(f_0)
+        f_2 = self.RDB2(f_1)
+        f_3 = self.RDB3(f_2)
+        f_D = torch.cat((f_1, f_2, f_3), 1)
+        f_1x1 = self.GFF1(f_D)
+        f_GF = self.GFF2(f_1x1)
+        f_DF = f_GF + f_
+        f_upconv = self.upconv(f_DF)
+        f_upscale = self.pixelshuffle(f_upconv)
+        f_conv2 = self.conv2(f_upscale)
+        return f_conv2
+
+
+class BasicBlock(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super(BasicBlock, self).__init__()
+        self.ID = input_dim
+        self.conv = nn.Conv2d(in_channels=input_dim, out_channels=output_dim, kernel_size=3, padding=1, stride=1)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        out = self.conv(x)
+        out = self.relu(out)
+        return torch.cat((x, out), 1)
+
+
+class RDB(nn.Module):
+    def __init__(self, nb_layers, input_dim, growth_rate):
+        super(RDB, self).__init__()
+        self.ID = input_dim
+        self.GR = growth_rate
+        self.layer = self._make_layer(nb_layers, input_dim, growth_rate)
+        self.conv1x1 = nn.Conv2d(in_channels=input_dim + nb_layers * growth_rate, \
+                                 out_channels=growth_rate, \
+                                 kernel_size=1, \
+                                 stride=1, \
+                                 padding=0)
+
+    def _make_layer(self, nb_layers, input_dim, growth_rate):
+        layers = []
+        for i in range(nb_layers):
+            layers.append(BasicBlock(input_dim + i * growth_rate, growth_rate))
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = self.layer(x)
+        out = self.conv1x1(out)
+        return out + x
+
 ## Residual Channel Attention Block (RCAB)
 class RCAB(nn.Module):
     def __init__(
@@ -93,8 +164,9 @@ class RCAB(nn.Module):
         for i in range(2):
             modules_body.append(conv(n_feat, n_feat, kernel_size, bias=bias,dilation=2**i,padding = 2**i))
             if bn: modules_body.append(nn.BatchNorm2d(n_feat))
+            modules_body.append(act)
             # if i is not 3: modules_body.append(act)
-            if i == 0: modules_body.append(act)
+            # if i == 0: modules_body.append(act)
         modules_body.append(CALayer(n_feat, reduction))
         self.body = nn.Sequential(*modules_body)
         self.res_scale = res_scale
@@ -128,7 +200,7 @@ class RCAB_RGB(nn.Module):
 
 ## Residual Group (RG)
 class ResidualGroup(nn.Module):
-    def __init__(self, conv, n_feat, kernel_size, reduction, act, res_scale, n_resblocks):
+    def __init__(self, conv, n_feat, kernel_size, reduction, act, res_scale, n_resblocks,out_channels):
         super(ResidualGroup, self).__init__()
         modules_body = []
         modules_body = [
@@ -138,12 +210,16 @@ class ResidualGroup(nn.Module):
         # modules_body.append(conv(in_channels=n_feat, out_channels=int(n_feat/2), kernel_size=kernel_size))
         self.body = nn.Sequential(*modules_body)
         # self.conv = conv(in_channels=n_feat, out_channels=int(n_feat/2), kernel_size=kernel_size) # for concat
-        self.conv = conv(in_channels=n_feat, out_channels=int(n_feat), kernel_size=kernel_size) # for add
+        convs = []
+        convs = [conv(in_channels=n_feat, out_channels=int(n_feat), kernel_size=1),
+                    conv(in_channels=n_feat, out_channels=out_channels, kernel_size=kernel_size)]# for add
+        self.conv = nn.Sequential(*convs)
 
     def forward(self, x):
         res = self.body(x)
         res += x
-        return self.conv(res)
+        res = self.conv(res)
+        return res
 
 ## Residual Group (RG)
 class ResidualGroup_RGB(nn.Module):
@@ -188,26 +264,25 @@ class RCAN(nn.Module):
         modules_head = [conv(args.n_colors, n_feats, kernel_size)]
 
         # define body module
-        # modules_body = [ # for concat
+        modules_body = [ # for concat
+            ResidualGroup(conv, n_feats*2, kernel_size, reduction, act=act, res_scale=args.res_scale, n_resblocks=n_resblocks,out_channels=int(n_feats)),
+            ResidualGroup(conv, n_feats*2, kernel_size, reduction, act=act, res_scale=args.res_scale, n_resblocks=n_resblocks, out_channels=int(n_feats*2))]
+
+        # modules_body = [ # for add
         #     ResidualGroup(
-        #         conv, n_feats*2, kernel_size, reduction, act=act, res_scale=args.res_scale, n_resblocks=n_resblocks) \
+        #         conv, n_feats, kernel_size, reduction, act=act, res_scale=args.res_scale, n_resblocks=n_resblocks) \
         #     for _ in range(n_resgroups)]
 
-        modules_body = [ # for add
-            ResidualGroup(
-                conv, n_feats, kernel_size, reduction, act=act, res_scale=args.res_scale, n_resblocks=n_resblocks) \
-            for _ in range(n_resgroups)]
-
-        # modules_body.append(conv(n_feats*2, n_feats*2, kernel_size)) # for concat
-        modules_body.append(conv(n_feats , n_feats , kernel_size))  # for add
+        modules_body.append(conv(n_feats*2, n_feats*2, kernel_size)) # for concat
+        # modules_body.append(conv(n_feats , n_feats , kernel_size))  # for add
 
         # define tail module
-        # modules_tail = [
-        #     common.Upsampler(conv, scale, n_feats*2, act=False), # for concat
-        #     conv(n_feats*2, args.n_colors, kernel_size)]
         modules_tail = [
-            common.Upsampler(conv, scale, n_feats , act=False), # for add
-            conv(n_feats , args.n_colors, kernel_size)]
+            common.Upsampler(conv, scale, n_feats*2, act=False), # for concat
+            conv(n_feats*2, args.n_colors, kernel_size)]
+        # modules_tail = [
+        #     common.Upsampler(conv, scale, n_feats , act=False), # for add
+        #     conv(n_feats , args.n_colors, kernel_size)]
 
         self.add_mean = common.MeanShift(args.n_colors, args.rgb_range,rgb_mean=[0.5],rgb_std =[1.0], sign=1)
 
@@ -221,15 +296,24 @@ class RCAN(nn.Module):
         self.sub_mean_rgb = common.MeanShift(3, 255.0)
 
         # define head module
-        modules_head = [conv(3, n_feats, kernel_size)]
+        modules_head = [conv(3, n_feats, kernel_size),
+                        conv(n_feats,n_feats,kernel_size=1),
+                        nn.ReLU(True)]
 
         # define body module
-        modules_body = [
-            ResidualGroup_RGB(
-                conv, n_feats, kernel_size, reduction, act=act, res_scale=args.res_scale, n_resblocks=n_resblocks) \
-            for _ in range(n_resgroups)]
+        modules_body = [conv(n_feats,n_feats,kernel_size=1),
+                        conv(n_feats, n_feats, kernel_size=3),
+                        nn.ReLU(True)]
 
-        modules_body.append(conv(n_feats, n_feats, kernel_size))
+        modules_tail = [conv(n_feats, n_feats, kernel_size=1),
+                        conv(n_feats, n_feats*2, kernel_size=1),
+                        nn.ReLU(True)]
+        # modules_body = [
+        #     ResidualGroup_RGB(
+        #         conv, n_feats, kernel_size, reduction, act=act, res_scale=args.res_scale, n_resblocks=n_resblocks) \
+        #     for _ in range(n_resgroups)]
+
+        # modules_body.append(conv(n_feats, n_feats, kernel_size))
 
         self.head_AILayer = IALayer(n_feats, kernel_size, reduction,use_sa=args.use_sa, use_ca=args.use_ca)
         modules_AILayers = [IALayer(n_feats, kernel_size, reduction,use_sa=args.use_sa, use_ca=args.use_ca) for _ in range(n_resgroups)]
@@ -243,6 +327,7 @@ class RCAN(nn.Module):
 
         self.head_rgb = nn.Sequential(*modules_head)
         self.body_rgb = nn.Sequential(*modules_body)
+        self.tail_rgb = nn.Sequential(*modules_tail)
         self.AILayers = nn.Sequential(*modules_AILayers)
         # self.tail_rgb = nn.Sequential(*modules_tail)
 
@@ -263,8 +348,8 @@ class RCAN(nn.Module):
         if self.use_attention:
             AI = self.head_AILayer(rgb)
             alpha = 0.5#self.res_scales[0]
-            d = d.mul(alpha) + AI.mul(1 - alpha)
-            # d = torch.cat((d,AI),1)
+            # d = d.mul(alpha) + AI.mul(1 - alpha)
+            d = torch.cat((d,d*AI),1)
         else:
             AI = nn.functional.interpolate(rgb, scale_factor=float(1/self.scale), mode='bilinear', align_corners=True)
             d = torch.cat((d, AI), 1)
@@ -275,26 +360,28 @@ class RCAN(nn.Module):
         for m in range(len(self.body._modules)):
 
             d_module   = self.body._modules[str(m)]
-            rgb_module = self.body_rgb._modules[str(m)]
+            res_d = d_module(res_d)
 
-            res_d      = d_module(res_d)
-            res_rgb    = rgb_module(res_rgb)
-
-            if 'ResidualGroup' in str(d_module):
+            if m==0:#(len(self.body._modules)/2):
+                # rgb_module = self.body_rgb._modules[str(m)]
+                # res_rgb    = rgb_module(res_rgb)
+                res_rgb    = self.body_rgb(res_rgb)
                 # A = self.AILayers[m](res_rgb)
                 # min = torch.min(A)
                 # max = torch.max(A)
                 if self.use_attention:
                     AI = self.AILayers[m](res_rgb)
                     alpha = 0.5#self.res_scales[m + 1]
-                    # res_d = torch.cat((res_d, AI), 1)
-                    res_d = res_d.mul(alpha) + self.AILayers[m](res_rgb).mul(1 - alpha)
+                    res_d = torch.cat((res_d, res_d*AI), 1)
+                    # res_d = res_d.mul(alpha) + AI.mul(1 - alpha)
                 else:
                     AI = nn.functional.interpolate(res_rgb, scale_factor=float(1/self.scale), mode='bilinear',
                                                    align_corners=True)
                     res_d = torch.cat((res_d, AI), 1)
 
-
+        # res_rgb = self.tail_rgb(res_rgb)
+        # AI = self.AILayers[-1](res_rgb)
+        # res_d = res_d.mul(alpha) + AI.mul(1 - alpha)
         res_d += d
 
         d = self.tail(res_d)
