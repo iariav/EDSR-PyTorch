@@ -1,5 +1,4 @@
-from model import common_rnan
-from model import common
+from model import common_rnan as common
 
 import torch.nn as nn
 
@@ -39,7 +38,7 @@ class RNAN(nn.Module):
         n_feats = args.n_feats
         kernel_size = 3
         reduction = args.reduction 
-        scale = args.scale[0]
+        self.scale = args.scale[0]
         act = nn.ReLU(True)
         
 
@@ -53,7 +52,7 @@ class RNAN(nn.Module):
         modules_body1 = [
             _ResGroup(
                 conv, n_feats, kernel_size, act=act, res_scale=args.res_scale) \
-            for _ in range(n_resgroup - 2)]
+            for _ in range(n_resgroup)]
         # modules_body_nl_high = [
         #     _NLResGroup(
         #         conv, n_feats, kernel_size, act=act, res_scale=args.res_scale)]
@@ -62,7 +61,7 @@ class RNAN(nn.Module):
         modules_body2 = [
             _ResGroup(
                 conv, n_feats, kernel_size, act=act, res_scale=args.res_scale) \
-            for _ in range(n_resgroup - 2)]
+            for _ in range(n_resgroup)]
         modules_body2.append(conv(n_feats, n_feats, kernel_size))
 
         # define tail module       
@@ -109,10 +108,8 @@ class RNAN(nn.Module):
 
         self.rgb_ds = nn.Sequential(*modules_rgb_downsize)
 
-        self.fuse_conv = conv(n_feats * 2, n_feats, kernel_size=1)
-
-        self.AILayer = common_rnan.NLMaskBranchDownUp(conv, n_feats, kernel_size, bias=True, bn=False, act=nn.ReLU(True), res_scale=1)
-        self.AILayer_ds = common_rnan.NLMaskBranchDownUp(conv, n_feats, kernel_size, bias=True, bn=False, act=nn.ReLU(True), res_scale=1)
+        self.AILayer = common.NLMaskBranchDownUp(conv, n_feats, kernel_size, bias=True, bn=False, act=nn.ReLU(True), res_scale=1)
+        self.AILayer_ds = common.NLMaskBranchDownUp(conv, n_feats, kernel_size, bias=True, bn=False, act=nn.ReLU(True), res_scale=1)
 
         self.tail_conv = conv(n_feats, args.n_colors, kernel_size=kernel_size, padding=(kernel_size - 1) // 2, stride=1)
 
@@ -126,20 +123,15 @@ class RNAN(nn.Module):
         AI_ds = self.AILayer_ds(rgb_ds)
         AI = self.AILayer(rgb_os)
 
-        feats_shallow = self.head(x)
-        feats_shallow = feats_shallow.mul(AI_ds)
+        feats_shallow = self.head(x).mul(AI_ds)
         res = self.body1(feats_shallow)
         res += feats_shallow
 
-        res_up = self.UPNet(res)
-        res_up = res_up.mul(AI)
+        res_up = self.UPNet(res).mul(AI)
         res_up_out = self.body2(res_up)
-
         res_up_out += res_up
 
-        out = self.tail_conv(res_up_out)
-
-        return out
+        return self.tail_conv(res_up_out)
 
 
     def load_state_dict(self, state_dict, strict=False):

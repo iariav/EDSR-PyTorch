@@ -6,10 +6,12 @@ import torch.nn.functional as F
 
 from torch.autograd import Variable
 
-def default_conv(in_channels, out_channels, kernel_size, bias=True):
+def default_conv(in_channels, out_channels, kernel_size, bias=True,dilation=1,padding=-1, stride=1):
+    if padding<0:
+        padding = (kernel_size//2)
     return nn.Conv2d(
         in_channels, out_channels, kernel_size,
-        padding=(kernel_size//2), bias=bias)
+        padding=padding, bias=bias,dilation=dilation,stride=stride)
 
 class MeanShift(nn.Conv2d):
     def __init__(self, rgb_range, rgb_mean, rgb_std, sign=-1):
