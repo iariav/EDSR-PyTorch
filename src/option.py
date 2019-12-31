@@ -78,7 +78,7 @@ parser.add_argument('--G0', type=int, default=64,
                     help='default number of filters. (Use in RDN)')
 parser.add_argument('--RDNkSize', type=int, default=3,
                     help='default kernel size. (Use in RDN)')
-parser.add_argument('--RDNconfig', type=str, default='B',
+parser.add_argument('--RDNconfig', type=str, default='C',
                     help='parameters config of RDN. (Use in RDN)')
 
 # Option for Residual channel attention network (RCAN)

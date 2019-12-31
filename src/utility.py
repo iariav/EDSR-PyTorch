@@ -263,8 +263,9 @@ def make_optimizer(args, target):
     # scheduler
     milestones = list(map(lambda x: int(x), args.decay.split('-')))
     kwargs_scheduler = {'milestones': milestones, 'gamma': args.gamma}
+    # kwargs_scheduler = {'gamma': 0.995}
     scheduler_class = lrs.MultiStepLR
-
+    # scheduler_class = lrs.ExponentialLR
     class CustomOptimizer(optimizer_class):
         def __init__(self, *args, **kwargs):
             super(CustomOptimizer, self).__init__(*args, **kwargs)

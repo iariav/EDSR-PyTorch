@@ -147,7 +147,7 @@ class mm_RDN(nn.Module):
         D, C, G = {
             'A': (20, 6, 32),
             'B': (16, 8, 64),
-            'C': (6, 8, 64), #  (3, 4, 32),
+            'C': (10, 8, 64), #  (3, 4, 32),
         }[args.RDNconfig]
 
 
@@ -162,6 +162,7 @@ class mm_RDN(nn.Module):
             )
 
         self.AILayer = IALayer(G, kSize, reduction, use_sa=args.use_sa, use_ca=args.use_ca)
+        self.AILayer_ds = IALayer(G, kSize, reduction, use_sa=args.use_sa, use_ca=args.use_ca)
 
         # Up-sampling net
         if r == 2 or r == 3:
@@ -203,17 +204,21 @@ class mm_RDN(nn.Module):
         # d = self.sub_mean_d(d)
         # rgb = self.sub_mean_rgb(rgb)
 
+        rgb_os = self.rgb_os(rgb)
+        rgb_ds = self.rgb_ds(rgb_os)
+
+        AI_ds = self.AILayer_ds(rgb_ds)
+        AI = self.AILayer(rgb_os)
+
         f__1 = self.SFENet1(d)
         x  = self.SFENet2(f__1)
+        x = x.mul(AI_ds)
+
 
         RDN1_out = self.RDNs[0](x)
         RDN1_out += f__1
         RDN1_out_up = self.UPNet(RDN1_out)
 
-        rgb_os = self.rgb_os(rgb)
-        rgb_ds = self.rgb_ds(rgb_os)
-
-        AI = self.AILayer(rgb_os)
 
         RDN2_in = torch.cat([RDN1_out_up,RDN1_out_up.mul(AI)],1)
         RDN2_in = self.fuse_conv(RDN2_in)
@@ -224,3 +229,31 @@ class mm_RDN(nn.Module):
         # out = self.add_mean_d(out)
 
         return out
+
+    def load_state_dict(self, state_dict, strict=False):
+        own_state = self.state_dict()
+        for name, param in state_dict.items():
+            if name in own_state:
+                if isinstance(param, nn.Parameter):
+                    param = param.data
+                try:
+                    own_state[name].copy_(param)
+                except Exception:
+                    if name.find('tail') >= 0:
+                        print('Replace pre-trained upsampler to new one...')
+                    elif name.find('GFF') >= 0:
+                        print('Replace pre-trained GFF to new one...')
+                    else:
+                        raise RuntimeError('While copying the parameter named {}, '
+                                           'whose dimensions in the model are {} and '
+                                           'whose dimensions in the checkpoint are {}.'
+                                           .format(name, own_state[name].size(), param.size()))
+            elif strict:
+                if name.find('tail') == -1:
+                    raise KeyError('unexpected key "{}" in state_dict'
+                                   .format(name))
+
+        if strict:
+            missing = set(own_state.keys()) - set(state_dict.keys())
+            if len(missing) > 0:
+                raise KeyError('missing keys in state_dict: "{}"'.format(missing))
