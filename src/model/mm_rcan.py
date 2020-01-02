@@ -4,6 +4,7 @@ from model import common
 import torch
 import torch.nn as nn
 import numpy as np
+import math
 
 def make_model(args, parent=False):
     return RCAN(args)
@@ -129,7 +130,7 @@ class RCAN(nn.Module):
     def __init__(self, args, conv=common.default_conv):
         super(RCAN, self).__init__()
 
-        n_resgroups = args.n_resgroups
+
         n_resblocks = args.n_resblocks
         n_feats = args.n_feats
         kernel_size = 3
@@ -141,10 +142,9 @@ class RCAN(nn.Module):
         self.use_attention = args.use_attention
         self.scale = scale
 
-        ##### Depth branch #####
+        n_resgroups = args.n_resgroups*int(math.log(scale, 2))
 
-        # RGB mean for DIV2K
-        self.sub_mean = common.MeanShift(args.n_colors, args.rgb_range,rgb_mean=[0.5],rgb_std =[1.0])
+        ##### Depth branch #####
 
         # define head module
         self.SFENet1 = nn.Conv2d(args.n_colors, n_feats, kernel_size, padding=(kernel_size - 1) // 2, stride=1)
@@ -161,31 +161,34 @@ class RCAN(nn.Module):
 
         self.resgroups.append(conv(n_feats, n_feats, kernel_size)) # for concat
 
+        # for scale 4
+
+        self.resgroups_s4 = nn.ModuleList()
+        for i in range(2):
+            self.resgroups_s4.append(
+                ResidualGroup(
+                    conv, n_feats, kernel_size, reduction, act=act, res_scale=args.res_scale, n_resblocks=n_resblocks)
+            )
+
+        self.resgroups_s4.append(conv(n_feats, n_feats, kernel_size))  # for concat
+
+
         # Up-sampling net
-        if self.scale == 2 or self.scale == 3:
-            self.UPNet = nn.Sequential(*[
-                nn.Conv2d(n_feats, n_feats * self.scale * self.scale, kernel_size, padding=(kernel_size - 1) // 2, stride=1),
-                nn.PixelShuffle(self.scale)
-                # nn.Conv2d(G, args.n_colors, kSize, padding=(kSize-1)//2, stride=1)
-            ])
-        elif self.scale == 4:
-            self.UPNet = nn.Sequential(*[
-                nn.Conv2d(n_feats, n_feats * 4, kernel_size, padding=(kernel_size - 1) // 2, stride=1),
-                nn.PixelShuffle(2),
-                nn.Conv2d(n_feats, n_feats * 4, kernel_size, padding=(kernel_size - 1) // 2, stride=1),
-                nn.PixelShuffle(2),
-                # nn.Conv2d(G, args.n_colors, kSize, padding=(kSize-1)//2, stride=1)
-            ])
-        else:
-            raise ValueError("scale must be 2 or 3 or 4.")
 
-        self.add_mean = common.MeanShift(args.n_colors, args.rgb_range,rgb_mean=[0.5],rgb_std =[1.0], sign=1)
+        self.UPNet = nn.Sequential(*[
+            nn.Conv2d(n_feats, n_feats * self.scale * self.scale, kernel_size, padding=(kernel_size - 1) // 2, stride=1),
+            nn.PixelShuffle(self.scale)
+            # nn.Conv2d(G, args.n_colors, kSize, padding=(kSize-1)//2, stride=1)
+        ])
 
+        self.UPNet_s4 = nn.Sequential(*[
+            nn.Conv2d(n_feats, n_feats * self.scale * self.scale, kernel_size, padding=(kernel_size - 1) // 2,
+                      stride=1),
+            nn.PixelShuffle(self.scale)
+            # nn.Conv2d(G, args.n_colors, kSize, padding=(kSize-1)//2, stride=1)
+        ])
 
         ##### RGB branch #####
-
-        # RGB mean for DIV2K
-        self.sub_mean_rgb = common.MeanShift(3, 255.0)
 
         ### RGB BRANCH ###
         modules_rgb = [conv(3, n_feats, kernel_size=1),
@@ -210,6 +213,7 @@ class RCAN(nn.Module):
 
     def forward(self, d, rgb):
 
+        ## scale 2
         rgb_os = self.rgb_os(rgb)
         rgb_ds = self.rgb_ds(rgb_os)
 
@@ -229,6 +233,7 @@ class RCAN(nn.Module):
         RG2_out = self.resgroups[1](RG2_in)
         RG2_out += RG1_out_up
 
+        # scale 4
         out = self.tail_conv(RG2_out)
 
         return out

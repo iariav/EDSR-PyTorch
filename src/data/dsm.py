@@ -17,9 +17,9 @@ class dsm(srdata.SRData):
 
     def _scan(self):
         names_hr, names_lr = super(dsm, self)._scan()
-        names_hr = [names_hr[i] for i in self.data_indices]
+        names_hr = [names_hr[i-1] for i in self.data_indices]
         for n in range(len(names_lr)):
-            names_lr[n] = [names_lr[n][i] for i in self.data_indices]
+            names_lr[n] = [names_lr[n][i-1] for i in self.data_indices]
 
         return names_hr, names_lr
 
