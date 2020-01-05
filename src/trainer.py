@@ -113,6 +113,7 @@ class Trainer():
         self.loss.end_log(len(self.loader_train))
         self.error_last = self.loss.log[-1, -1]
         self.optimizer.schedule()
+        # self.model.save(self.ckp.get_path('model'), epoch, is_best=True)
 
     def test(self):
         torch.set_grad_enabled(False)

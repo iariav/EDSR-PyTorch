@@ -176,15 +176,15 @@ class RCAN(nn.Module):
         # Up-sampling net
 
         self.UPNet = nn.Sequential(*[
-            nn.Conv2d(n_feats, n_feats * self.scale * self.scale, kernel_size, padding=(kernel_size - 1) // 2, stride=1),
-            nn.PixelShuffle(self.scale)
+            nn.Conv2d(n_feats, n_feats * 4, kernel_size, padding=(kernel_size - 1) // 2, stride=1),
+            nn.PixelShuffle(2)
             # nn.Conv2d(G, args.n_colors, kSize, padding=(kSize-1)//2, stride=1)
         ])
 
         self.UPNet_s4 = nn.Sequential(*[
-            nn.Conv2d(n_feats, n_feats * self.scale * self.scale, kernel_size, padding=(kernel_size - 1) // 2,
+            nn.Conv2d(n_feats, n_feats * 4, kernel_size, padding=(kernel_size - 1) // 2,
                       stride=1),
-            nn.PixelShuffle(self.scale)
+            nn.PixelShuffle(2)
             # nn.Conv2d(G, args.n_colors, kSize, padding=(kSize-1)//2, stride=1)
         ])
 
@@ -203,11 +203,31 @@ class RCAN(nn.Module):
 
         self.rgb_ds = nn.Sequential(*modules_rgb_downsize)
 
+
         self.fuse_conv = conv(n_feats * 2, n_feats, kernel_size=1)
 
 
         self.AILayer = IALayer(n_feats, kernel_size, reduction, use_sa=args.use_sa, use_ca=args.use_ca)
         self.AILayer_ds = IALayer(n_feats, kernel_size, reduction, use_sa=args.use_sa, use_ca=args.use_ca)
+
+        ### RGB BRANCH scale 4 ###
+        modules_rgb_s4 = [conv(n_feats, n_feats, kernel_size=1),
+                       conv(n_feats, n_feats, kernel_size=1, padding=0, stride=1),
+                       nn.ReLU(True)]
+
+        self.rgb_os_s4 = nn.Sequential(*modules_rgb_s4)
+
+        modules_rgb_downsize_s4 = [conv(n_feats, n_feats, kernel_size=1),
+                                conv(n_feats, n_feats, kernel_size=kernel_size, padding=(kernel_size - 1) // 2,
+                                     stride=2),
+                                nn.ReLU(True)]
+
+        self.rgb_ds_s4 = nn.Sequential(*modules_rgb_downsize_s4)
+
+        self.fuse_conv_s4 = conv(n_feats * 2, n_feats, kernel_size=1)
+
+        self.AILayer_s4 = IALayer(n_feats, kernel_size, reduction, use_sa=args.use_sa, use_ca=args.use_ca)
+        self.AILayer_ds_s4 = IALayer(n_feats, kernel_size, reduction, use_sa=args.use_sa, use_ca=args.use_ca)
 
         self.tail_conv = conv(n_feats, args.n_colors, kernel_size=kernel_size, padding=(kernel_size - 1) // 2, stride=1)
 
@@ -217,24 +237,41 @@ class RCAN(nn.Module):
         rgb_os = self.rgb_os(rgb)
         rgb_ds = self.rgb_ds(rgb_os)
 
+        rgb_os_s4 = self.rgb_os_s4(rgb_ds)
+        rgb_ds_s4 = self.rgb_ds_s4(rgb_os_s4)
+
         AI_ds = self.AILayer_ds(rgb_ds)
         AI = self.AILayer(rgb_os)
+        AI_ds_s4 = self.AILayer_ds(rgb_ds_s4)
+        AI_s4 = self.AILayer(rgb_os_s4)
 
+        ### SCALE 2
         f__1 = self.SFENet1(d)
         f__2 = self.SFENet2(f__1)
-        x = f__2.mul(AI_ds)
+        x = f__2.mul(AI_ds_s4)
 
         RG1_out = self.resgroups[0](x)
         RG1_out += f__2
         RG1_out_up = self.UPNet(RG1_out)
 
-        RG2_in = torch.cat([RG1_out_up, RG1_out_up.mul(AI)], 1)
+        RG2_in = torch.cat([RG1_out_up, RG1_out_up.mul(AI_s4)], 1)
         RG2_in = self.fuse_conv(RG2_in)
         RG2_out = self.resgroups[1](RG2_in)
         RG2_out += RG1_out_up
 
         # scale 4
-        out = self.tail_conv(RG2_out)
+
+        RG2_out = RG2_out.mul(AI_ds)
+        RG1_out_s4 = self.resgroups_s4[0](RG2_out)
+        RG1_out_s4 += RG2_out
+        RG1_out_up_s4 = self.UPNet_s4(RG1_out_s4)
+
+        RG2_in_s4 = torch.cat([RG1_out_up_s4, RG1_out_up_s4.mul(AI)], 1)
+        RG2_in_s4 = self.fuse_conv_s4(RG2_in_s4)
+        RG2_out_s4 = self.resgroups_s4[1](RG2_in_s4)
+        RG2_out_s4 += RG1_out_up_s4
+
+        out = self.tail_conv(RG2_out_s4)
 
         return out
 

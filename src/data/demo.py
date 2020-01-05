@@ -26,7 +26,7 @@ class Demo(data.Dataset):
     def __getitem__(self, idx):
         filename = os.path.splitext(os.path.basename(self.filelist[idx]))[0]
         hr = imageio.imread(self.filelist[idx])
-        lr_fname = self.filelist[idx].replace('test_HR','test_LR_bicubic/X2')
+        lr_fname = self.filelist[idx].replace('test_HR','test_LR_bicubic/X' + str(self.scale[0]))
         lr = imageio.imread(lr_fname)
 
         rgb_fname = self.filelist[idx].replace('test_HR', 'test_HR_rgb')
