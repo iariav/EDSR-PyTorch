@@ -54,11 +54,12 @@ class IALayer(nn.Module):
 
             self.conv_sa = nn.Sequential(
                 nn.Conv2d(channel, channel // reduction, 1, padding=0, bias=True),
-                nn.Conv2d(channel // reduction, channel // reduction, kernel_size, padding=(kernel_size - 1) // 2, stride=1),
-                nn.Conv2d(channel // reduction, channel // reduction, kernel_size, padding=(kernel_size - 1) // 2, stride=1),
+                nn.Conv2d(channel // reduction, channel // reduction, kernel_size, padding=(kernel_size - 1) // 2,
+                          stride=1),
+                nn.Conv2d(channel // reduction, channel // reduction, kernel_size, padding=(kernel_size - 1) // 2,
+                          stride=1),
                 nn.Conv2d(channel // reduction, 1, 1, padding=0, bias=True)
             )
-
             # self.conv_sa1 = nn.Sequential(
             #         nn.Conv2d(channel, channel//2, kernel_size=[1,9], padding=2, stride=1),
             #         nn.Conv2d(channel// 2, 1, kernel_size=[9, 1], padding=2, stride=1)
@@ -137,6 +138,7 @@ class RCAN(nn.Module):
     def __init__(self, args, conv=common.default_conv):
         super(RCAN, self).__init__()
 
+
         n_resblocks = args.n_resblocks
         n_feats = args.n_feats
         kernel_size = 3
@@ -159,177 +161,116 @@ class RCAN(nn.Module):
         # define body module
 
         self.resgroups = nn.ModuleList()
-        for i in range(2):
-            self.resgroups.append(
-                ResidualGroup(
-                    conv, n_feats, kernel_size, reduction, act=act, res_scale=args.res_scale, n_resblocks=n_resblocks)
+        for s in range (int(math.log(scale, 2))):
+            for i in range(2):
+                self.resgroups.append(
+                    ResidualGroup(
+                        conv, n_feats, kernel_size, reduction, act=act, res_scale=args.res_scale, n_resblocks=n_resblocks)
+                )
+
+            # self.resgroups.append(conv(n_feats, n_feats, kernel_size)) # for concat
+
+        ##### Up-sampling ######
+
+        self.UPNet = nn.ModuleList()
+        for s in range(int(math.log(scale, 2))):
+            self.UPNet.append(
+                nn.Sequential(*[
+                    nn.Conv2d(n_feats, n_feats * 4, kernel_size, padding=(kernel_size - 1) // 2, stride=1),
+                    nn.PixelShuffle(2)
+                ])
             )
 
-        # self.resgroups.append(conv(n_feats, n_feats, kernel_size)) # for concat
-
-        # for scale 4
-
-        self.resgroups_s4 = nn.ModuleList()
-        for i in range(2):
-            self.resgroups_s4.append(
-                ResidualGroup(
-                    conv, n_feats, kernel_size, reduction, act=act, res_scale=args.res_scale, n_resblocks=n_resblocks)
-            )
-
-        # self.resgroups_s4.append(conv(n_feats, n_feats, kernel_size))  # for concat
-
-        # for scale 8
-
-        self.resgroups_s8 = nn.ModuleList()
-        for i in range(2):
-            self.resgroups_s8.append(
-                ResidualGroup(
-                    conv, n_feats, kernel_size, reduction, act=act, res_scale=args.res_scale, n_resblocks=n_resblocks)
-            )
-
-
-        # Up-sampling net
-
-        self.UPNet = nn.Sequential(*[
-            nn.Conv2d(n_feats, n_feats * 4, kernel_size, padding=(kernel_size - 1) // 2, stride=1),
-            nn.PixelShuffle(2)
-        ])
-
-
-        self.UPNet_s4 = nn.Sequential(*[
-            nn.Conv2d(n_feats, n_feats * 4, kernel_size, padding=(kernel_size - 1) // 2,
-                      stride=1),
-            nn.PixelShuffle(2)
-        ])
-
-        self.UPNet_s8 = nn.Sequential(*[
-            nn.Conv2d(n_feats, n_feats * 4, kernel_size, padding=(kernel_size - 1) // 2,
-                      stride=1),
-            nn.PixelShuffle(2)
-        ])
 
         ##### RGB branch #####
 
-        ### RGB BRANCH ###
-        modules_rgb = [conv(3, n_feats, kernel_size=1),
-                       conv(n_feats, n_feats, kernel_size=1, padding=0, stride=1),
-                       nn.ReLU(True)]
+        self.rgb_os = nn.ModuleList()
 
-        self.rgb_os = nn.Sequential(*modules_rgb)
+        for s in range(int(math.log(scale, 2))):
+            if s == 0:
+                self.rgb_os.append(
+                    nn.Sequential(*[conv(3, n_feats, kernel_size=1),
+                           conv(n_feats, n_feats, kernel_size=1, padding=0, stride=1),
+                           nn.ReLU(True)])
+                )
+            else:
+                self.rgb_os.append(
+                    nn.Sequential(*[conv(n_feats, n_feats, kernel_size=1),
+                                    conv(n_feats, n_feats, kernel_size=1, padding=0, stride=1),
+                                    nn.ReLU(True)])
+                )
 
-        modules_rgb_downsize = [conv(n_feats, n_feats, kernel_size=1),
+        self.rgb_ds = nn.ModuleList()
+        for s in range(int(math.log(scale, 2))):
+            self.rgb_ds.append(
+                nn.Sequential(*[conv(n_feats, n_feats, kernel_size=1),
                                 conv(n_feats, n_feats, kernel_size=kernel_size, padding=(kernel_size - 1) // 2, stride=2),
-                                nn.ReLU(True)]
+                                nn.ReLU(True)])
+            )
 
-        self.rgb_ds = nn.Sequential(*modules_rgb_downsize)
+        ##### AI layers #####
+        self.AILayer = nn.ModuleList()
 
+        for s in range(int(math.log(scale, 2))):
+            self.AILayer.append(IALayer(n_feats, kernel_size, reduction, use_sa=args.use_sa, use_ca=args.use_ca))
+            self.AILayer.append(IALayer(n_feats, kernel_size, reduction, use_sa=args.use_sa, use_ca=args.use_ca))
 
-        self.fuse_conv = conv(n_feats * 2, n_feats, kernel_size=1)
+        ##### fuse layers #####
 
+        self.fuse_conv = nn.ModuleList()
 
-        self.AILayer = IALayer(n_feats, kernel_size, reduction, use_sa=args.use_sa, use_ca=args.use_ca)
-        self.AILayer_ds = IALayer(n_feats, kernel_size, reduction, use_sa=args.use_sa, use_ca=args.use_ca)
+        for s in range(int(math.log(scale, 2))):
+            self.fuse_conv.append(conv(n_feats * 2, n_feats, kernel_size=1))
 
-        ### RGB BRANCH scale 4 ###
-        modules_rgb_s4 = [conv(n_feats, n_feats, kernel_size=1),
-                       conv(n_feats, n_feats, kernel_size=1, padding=0, stride=1),
-                       nn.ReLU(True)]
-
-        self.rgb_os_s4 = nn.Sequential(*modules_rgb_s4)
-
-        modules_rgb_downsize_s4 = [conv(n_feats, n_feats, kernel_size=1),
-                                conv(n_feats, n_feats, kernel_size=kernel_size, padding=(kernel_size - 1) // 2,
-                                     stride=2),
-                                nn.ReLU(True)]
-
-        self.rgb_ds_s4 = nn.Sequential(*modules_rgb_downsize_s4)
-
-        self.fuse_conv_s4 = conv(n_feats * 2, n_feats, kernel_size=1)
-
-        self.AILayer_s4 = IALayer(n_feats, kernel_size, reduction, use_sa=args.use_sa, use_ca=args.use_ca)
-        self.AILayer_ds_s4 = IALayer(n_feats, kernel_size, reduction, use_sa=args.use_sa, use_ca=args.use_ca)
-
-        ### RGB BRANCH scale 8 ###
-        modules_rgb_s8 = [conv(n_feats, n_feats, kernel_size=1),
-                          conv(n_feats, n_feats, kernel_size=1, padding=0, stride=1),
-                          nn.ReLU(True)]
-
-        self.rgb_os_s8 = nn.Sequential(*modules_rgb_s8)
-
-        modules_rgb_downsize_s8 = [conv(n_feats, n_feats, kernel_size=1),
-                                   conv(n_feats, n_feats, kernel_size=kernel_size, padding=(kernel_size - 1) // 2,
-                                        stride=2),
-                                   nn.ReLU(True)]
-
-        self.rgb_ds_s8 = nn.Sequential(*modules_rgb_downsize_s8)
-
-        self.fuse_conv_s8 = conv(n_feats * 2, n_feats, kernel_size=1)
-
-        self.AILayer_s8 = IALayer(n_feats, kernel_size, reduction, use_sa=args.use_sa, use_ca=args.use_ca)
-        self.AILayer_ds_s8 = IALayer(n_feats, kernel_size, reduction, use_sa=args.use_sa, use_ca=args.use_ca)
+        ##### tail layers #####
 
         self.tail_conv = conv(n_feats, args.n_colors, kernel_size=kernel_size, padding=(kernel_size - 1) // 2, stride=1)
 
     def forward(self, d, rgb):
 
-        ## scale 2
-        rgb_os = self.rgb_os(rgb)
-        rgb_ds = self.rgb_ds(rgb_os)
+        # rgb and AI stream
 
-        rgb_os_s4 = self.rgb_os_s4(rgb_ds)
-        rgb_ds_s4 = self.rgb_ds_s4(rgb_os_s4)
+        rgb_stream = []
+        AI_stream = []
 
-        rgb_os_s8 = self.rgb_os_s4(rgb_ds_s4)
-        rgb_ds_s8 = self.rgb_ds_s4(rgb_os_s8)
+        res = rgb
+        for s in range(int(math.log(self.scale, 2))):
+            res = self.rgb_os[s](res)
+            rgb_stream.append(res)
+            res = self.rgb_ds[s](res)
+            rgb_stream.append(res)
 
+        rgb_stream.reverse()
 
-        AI_ds = self.AILayer_ds(rgb_ds)
-        AI = self.AILayer(rgb_os)
-        AI_ds_s4 = self.AILayer_ds(rgb_ds_s4)
-        AI_s4 = self.AILayer(rgb_os_s4)
-        AI_ds_s8 = self.AILayer_ds(rgb_ds_s8)
-        AI_s8 = self.AILayer(rgb_os_s8)
+        for r, item in enumerate(rgb_stream):
+            AI_stream.append(self.AILayer[r](item))
 
-        ### SCALE 2
+        # depth head modules
+
         f__1 = self.SFENet1(d)
         f__2 = self.SFENet2(f__1)
-        x = f__2.mul(AI_ds_s8)
 
-        RG1_out = self.resgroups[0](x)
-        RG1_out += f__2
-        RG1_out_up = self.UPNet(RG1_out)
+        # depth body modules
 
-        RG2_in = torch.cat([RG1_out_up, RG1_out_up.mul(AI_s8)], 1)
-        RG2_in = self.fuse_conv(RG2_in)
-        RG2_out = self.resgroups[1](RG2_in)
-        RG2_out += RG1_out_up
+        res_d = f__2
+        for s in range(int(math.log(self.scale, 2))):
+            x = res_d.mul(AI_stream[2*s])
 
-        # scale 4
+            RG1_out = self.resgroups[2*s](x)
+            RG1_out += res_d
+            RG1_out_up = self.UPNet[s](RG1_out)
 
-        RG2_out = RG2_out.mul(AI_ds_s4)
-        RG1_out_s4 = self.resgroups_s4[0](RG2_out)
-        RG1_out_s4 += RG2_out
-        RG1_out_up_s4 = self.UPNet_s4(RG1_out_s4)
+            RG2_in = torch.cat([RG1_out_up, RG1_out_up.mul(AI_stream[2*s + 1])], 1)
+            # RG2_in = RG1_out_up.mul(AI_stream[1 + 2 * s])
+            RG2_in = self.fuse_conv[s](RG2_in)
+            RG2_out = self.resgroups[2*s + 1](RG2_in)
+            RG2_out += RG1_out_up
 
-        RG2_in_s4 = torch.cat([RG1_out_up_s4, RG1_out_up_s4.mul(AI_s4)], 1)
-        RG2_in_s4 = self.fuse_conv_s4(RG2_in_s4)
-        RG2_out_s4 = self.resgroups_s4[1](RG2_in_s4)
-        RG2_out_s4 += RG1_out_up_s4
+            res_d = RG2_out
 
-        # scale 8
+        # depth tail modules
 
-        RG2_out_s4 = RG2_out_s4.mul(AI_ds)
-        RG1_out_s8 = self.resgroups_s8[0](RG2_out_s4)
-        RG1_out_s8 += RG2_out_s4
-        RG1_out_up_s8 = self.UPNet_s8(RG1_out_s8)
-
-        RG2_in_s8 = torch.cat([RG1_out_up_s8, RG1_out_up_s8.mul(AI)], 1)
-        RG2_in_s8 = self.fuse_conv_s8(RG2_in_s8)
-        RG2_out_s8 = self.resgroups_s8[1](RG2_in_s8)
-        RG2_out_s8 += RG1_out_up_s8
-
-        out = self.tail_conv(RG2_out_s8)
-        return out
+        return self.tail_conv(res_d)
 
     def normalizeIm(self, Im):
 
@@ -341,9 +282,6 @@ class RCAN(nn.Module):
         own_state = self.state_dict()
         for name, param in state_dict.items():
             if name in own_state:
-                # if name.find('UPNet') >= 0:
-                #     print('Replace pre-trained upsampler to new one...')
-                #     continue
                 if isinstance(param, nn.Parameter):
                     param = param.data
                 try:

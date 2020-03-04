@@ -33,7 +33,7 @@ class Trainer():
         if self.use_amp:
             self.model, self.optimizer = amp.initialize(
                 self.model, self.optimizer, opt_level='O1',
-                keep_batchnorm_fp32=None, loss_scale='dynamic')#,max_loss_scale=128.0)
+                keep_batchnorm_fp32=None, loss_scale='dynamic',max_loss_scale=64.0)
 
         self.error_last = 1e8
 
